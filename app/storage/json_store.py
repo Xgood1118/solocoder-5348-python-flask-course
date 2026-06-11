@@ -102,24 +102,30 @@ class JsonStore(Generic[T]):
     def _flush_worker(cls) -> None:
         while not cls._flush_stop_event.is_set():
             time.sleep(Config.FLUSH_INTERVAL)
+            need_flush = False
             with cls._lock:
                 if time.time() - cls._last_flush >= Config.FLUSH_INTERVAL:
-                    cls.flush_all()
+                    need_flush = True
+            if need_flush:
+                cls.flush_all()
 
     @classmethod
     def flush_all(cls) -> None:
         with cls._lock:
-            for instance in cls._instances.values():
-                instance._flush_to_disk()
+            instances = list(cls._instances.values())
             cls._last_flush = time.time()
             cls._write_count = 0
+        for instance in instances:
+            instance._flush_to_disk()
 
     def _mark_dirty(self) -> None:
-        self._dirty = True
+        need_flush = False
         with self.__class__._lock:
             self.__class__._write_count += 1
             if self.__class__._write_count >= Config.FLUSH_THRESHOLD:
-                self.__class__.flush_all()
+                need_flush = True
+        if need_flush:
+            self.__class__.flush_all()
 
     def get_all(self) -> list[T]:
         with self._data_lock:
@@ -132,20 +138,26 @@ class JsonStore(Generic[T]):
     def add(self, obj: T) -> None:
         with self._data_lock:
             self._data[obj.id] = obj
+            self._dirty = True
         self._mark_dirty()
 
     def update(self, obj: T) -> None:
         with self._data_lock:
             if obj.id in self._data:
                 self._data[obj.id] = obj
+                self._dirty = True
         self._mark_dirty()
 
     def delete(self, obj_id: str) -> bool:
+        deleted = False
         with self._data_lock:
             if obj_id in self._data:
                 del self._data[obj_id]
-                self._mark_dirty()
-                return True
+                self._dirty = True
+                deleted = True
+        if deleted:
+            self._mark_dirty()
+            return True
         return False
 
     def exists(self, obj_id: str) -> bool:
